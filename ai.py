@@ -41,11 +41,15 @@ AR_HEADERS = {
 # ---- OpenAI-compatible ----
 OAI_URL = f"{config.OPENAI_BASE_URL.rstrip('/')}/chat/completions"
 OAI_HEADERS = {
-    "Authorization": f"Bearer {config.OPENAI_API_KEY}",
     "Content-Type": "application/json",
     "HTTP-Referer": "https://github.com/sixdevilxd/telegram-ai-agent-termux",
     "X-Title": "CIPHER Telegram Agent",
 }
+# Kumpulan API key untuk rotasi (key pooling): kena 429 -> pindah key berikutnya.
+_OAI_KEYS = config.OPENAI_API_KEYS or ([config.OPENAI_API_KEY] if config.OPENAI_API_KEY else [])
+
+def _oai_headers(key):
+    return {**OAI_HEADERS, "Authorization": f"Bearer {key}"}
 OAI_TOOLS = [
     {"type": "function", "function": {"name": t["name"], "description": t["description"],
                                       "parameters": t["input_schema"]}}
@@ -137,15 +141,22 @@ def _oai_call(model, messages, use_tools=True, max_tokens=None):
     if use_tools:
         body["tools"] = OAI_TOOLS
         body["tool_choice"] = "auto"
-    # Retry dengan backoff untuk 429 (rate limit) & 5xx (server sibuk).
+    # Retry + ROTASI KEY: kena 429/5xx -> pindah ke key berikutnya, baru backoff.
+    keys = _OAI_KEYS or [""]
+    n = len(keys)
+    rounds = 3  # berapa kali memutar seluruh key
     last = None
-    for attempt in range(4):
-        r = requests.post(OAI_URL, headers=OAI_HEADERS, json=body, timeout=180)
+    for attempt in range(n * rounds):
+        key = keys[attempt % n]
+        r = requests.post(OAI_URL, headers=_oai_headers(key), json=body, timeout=180)
         if r.status_code == 429 or r.status_code >= 500:
             last = f"HTTP {r.status_code}"
-            ra = r.headers.get("Retry-After")
-            wait = float(ra) if (ra and ra.replace('.', '', 1).isdigit()) else (2 ** attempt) * 2
-            time.sleep(min(wait, 30))
+            # backoff hanya setelah semua key dicoba di ronde ini
+            if (attempt % n) == n - 1:
+                ra = r.headers.get("Retry-After")
+                rnd = attempt // n
+                wait = float(ra) if (ra and ra.replace('.', '', 1).isdigit()) else (2 ** rnd) * 2
+                time.sleep(min(wait, 30))
             continue
         try:
             data = r.json()
@@ -155,8 +166,8 @@ def _oai_call(model, messages, use_tools=True, max_tokens=None):
             raise RuntimeError(f"Provider OpenAI HTTP {r.status_code}: {data.get('error') if isinstance(data, dict) else r.text[:200]}")
         return data
     raise RuntimeError(
-        f"Provider sibuk / kena rate limit ({last}). NVIDIA NIM free tier punya batas "
-        "request per menit & kuota. Tunggu sebentar lalu coba lagi."
+        f"Semua {n} key kena rate limit ({last}). Tunggu sebentar, atau tambah key NVIDIA lagi "
+        "(pisahkan dengan koma di OPENAI_API_KEY)."
     )
 
 
