@@ -128,8 +128,8 @@ def _run_agentrouter(model, history, user_text, image_b64, media_type):
 # ===========================================================================
 # Backend 2: OpenAI-compatible (chat/completions)
 # ===========================================================================
-def _oai_call(model, messages, use_tools=True):
-    body = {"model": model, "max_tokens": config.MAX_TOKENS,
+def _oai_call(model, messages, use_tools=True, max_tokens=None):
+    body = {"model": model, "max_tokens": max_tokens or config.MAX_TOKENS,
             "messages": messages, "temperature": config.TEMPERATURE}
     if config.REASONING:
         # OpenRouter/o-series: aktifkan reasoning. Provider yang tak mendukung akan mengabaikan.
@@ -148,13 +148,20 @@ def _oai_call(model, messages, use_tools=True):
 
 
 def _run_openai(model, history, user_text, image_b64, media_type):
+    # Gambar: model teks-saja (mis. DeepSeek V4) tidak bisa "melihat".
+    # Routing ke model VISION NVIDIA, tanpa tool (VLM NIM tak mendukung function-calling).
     if image_b64:
-        user_content = [
+        vmodel = config.VISION_MODEL or model
+        vcontent = [
             {"type": "text", "text": user_text or "Analisa chart pada gambar ini secara teknikal."},
             {"type": "image_url", "image_url": {"url": f"data:{media_type or 'image/jpeg'};base64,{image_b64}"}},
         ]
-    else:
-        user_content = user_text
+        vmsgs = [{"role": "system", "content": config.SYSTEM_PROMPT}, *history,
+                 {"role": "user", "content": vcontent}]
+        data = _oai_call(vmodel, vmsgs, use_tools=False, max_tokens=min(config.MAX_TOKENS, 4096))
+        msg = data["choices"][0]["message"]
+        return (msg.get("content") or "_(model tidak mengembalikan teks)_"), []
+    user_content = user_text
     messages = [{"role": "system", "content": config.SYSTEM_PROMPT}]
     messages.extend(history)
     messages.append({"role": "user", "content": user_content})

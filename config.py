@@ -23,6 +23,8 @@ PROVIDER = os.getenv("PROVIDER", "openai").strip().lower()
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://integrate.api.nvidia.com/v1").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "deepseek-ai/deepseek-v4-pro").strip()
+# Model khusus analisa GAMBAR (vision). DeepSeek V4 = teks-saja, jadi pakai VLM NVIDIA.
+VISION_MODEL = os.getenv("VISION_MODEL", "meta/llama-3.2-90b-vision-instruct").strip()
 
 # ---- Perilaku AI ----
 SYSTEM_PROMPT = os.getenv(

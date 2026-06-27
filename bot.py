@@ -117,7 +117,11 @@ def handle_message(msg):
     if msg.get("photo"):
         send_typing(chat_id)
         try:
-            file_id = msg["photo"][-1]["file_id"]  # resolusi tertinggi
+            # NVIDIA NIM vision limit ~180KB base64 (~135KB raw): pilih ukuran
+            # terbesar yang masih muat, fallback ke yang terkecil.
+            _photos = msg["photo"]
+            _fit = [p for p in _photos if p.get("file_size", 10**9) <= 135000]
+            file_id = (_fit[-1] if _fit else _photos[0])["file_id"]
             b64, mt = download_photo(file_id)
             if not b64:
                 send_message(chat_id, "⚠️ Gagal mengunduh gambar.")
