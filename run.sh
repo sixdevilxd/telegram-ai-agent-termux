@@ -6,7 +6,7 @@ set -e
 cd "$(dirname "$0")"
 
 # Pastikan dependensi terpasang
-if ! python -c "import openai" 2>/dev/null; then
+if ! python -c "import requests, dotenv" 2>/dev/null; then
   echo "📦 Memasang dependensi..."
   pip install -r requirements.txt
 fi

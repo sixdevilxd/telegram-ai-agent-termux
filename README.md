@@ -8,7 +8,7 @@ Ringan, mudah, dan dirancang untuk berjalan di **Termux** (Android) maupun kompu
 - Ingatan percakapan per-chat (otomatis dipangkas).
 - Ganti model langsung dari chat: `/model claude-sonnet-4-5-20250929`.
 - Pembatasan akses opsional (hanya user tertentu).
-- Tanpa framework berat — hanya `openai`, `requests`, `python-dotenv`.
+- Tanpa framework berat & tanpa kompilasi — hanya `requests` + `python-dotenv` (100% pure-Python, mulus di Termux).
 
 ## 📋 Yang Perlu Disiapkan
 1. **Token Bot Telegram** — buat lewat [@BotFather](https://t.me/BotFather): kirim `/newbot`, ikuti langkahnya, salin token-nya.
@@ -96,7 +96,8 @@ python bot.py
 ## ❓ Masalah Umum
 - **"Konfigurasi belum lengkap"** → file `.env` belum diisi.
 - **"Token Telegram tidak valid"** → cek lagi `TELEGRAM_BOT_TOKEN`.
-- **Error dari AI / "unauthorized client"** → pastikan API key AgentRouter benar dan masih punya kuota. Project ini sudah memakai OpenAI SDK resmi agar tidak diblokir.
+- **Error dari AI / "unauthorized client"** → pastikan API key AgentRouter benar dan masih punya kuota. Bot ini sudah mengirim header ala OpenAI SDK agar tidak diblokir.
+- **Gagal install / error build `jiter` atau `pydantic-core`** → versi ini sudah TIDAK memakai paket `openai`, jadi tak ada lagi yang perlu dikompilasi. Pastikan kamu sudah `git pull` versi terbaru, lalu `pip install -r requirements.txt`.
 - **Bot diam saja** → pastikan `bash run.sh` masih berjalan dan ada koneksi internet.
 
 ---

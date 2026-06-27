@@ -23,7 +23,6 @@ import logging
 from collections import defaultdict, deque
 
 import requests
-from openai import OpenAI
 
 import config
 
@@ -44,11 +43,20 @@ config.validate()
 
 TG_API = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}"
 
-# Gunakan OpenAI SDK resmi -> AgentRouter memblokir klien yang tidak dikenali.
-ai_client = OpenAI(
-    api_key=config.AGENTROUTER_API_KEY,
-    base_url=config.AGENTROUTER_BASE_URL,
-)
+# Endpoint chat completions AgentRouter (OpenAI-compatible).
+AR_URL = f"{config.AGENTROUTER_BASE_URL.rstrip('/')}/chat/completions"
+
+# Header dibuat menyerupai OpenAI SDK resmi -> AgentRouter memblokir klien
+# yang tidak dikenali ("unauthorized client detected").
+AR_HEADERS = {
+    "Authorization": f"Bearer {config.AGENTROUTER_API_KEY}",
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+    "User-Agent": "OpenAI/Python 1.51.0",
+    "X-Stainless-Lang": "python",
+    "X-Stainless-Package-Version": "1.51.0",
+    "X-Stainless-Runtime": "CPython",
+}
 
 # Riwayat percakapan per chat_id (deque berisi {"role","content"})
 history = defaultdict(lambda: deque(maxlen=config.MAX_HISTORY * 2))
@@ -108,12 +116,21 @@ def ask_ai(chat_id: int, user_text: str) -> str:
     messages.extend(history[chat_id])
     messages.append({"role": "user", "content": user_text})
 
-    completion = ai_client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=config.TEMPERATURE,
+    resp = requests.post(
+        AR_URL,
+        headers=AR_HEADERS,
+        json={
+            "model": model,
+            "messages": messages,
+            "temperature": config.TEMPERATURE,
+        },
+        timeout=120,
     )
-    answer = (completion.choices[0].message.content or "").strip()
+    if resp.status_code != 200:
+        raise RuntimeError(f"AgentRouter HTTP {resp.status_code}: {resp.text[:300]}")
+
+    data = resp.json()
+    answer = (data["choices"][0]["message"].get("content") or "").strip()
 
     # Simpan ke riwayat
     history[chat_id].append({"role": "user", "content": user_text})
