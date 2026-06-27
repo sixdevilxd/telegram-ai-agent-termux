@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 # Muat variabel dari file .env (jika ada)
 load_dotenv()
 
-# ---- Kredensial wajib ----
+# ---- Kredensial ----
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 AGENTROUTER_API_KEY = os.getenv("AGENTROUTER_API_KEY", "").strip()
 
@@ -16,6 +16,14 @@ AGENTROUTER_API_KEY = os.getenv("AGENTROUTER_API_KEY", "").strip()
 AGENTROUTER_BASE_URL = os.getenv("AGENTROUTER_BASE_URL", "https://agentrouter.org/v1").strip()
 # Model default. AgentRouter umumnya hanya mengizinkan claude-opus-4-6 di sebagian plan.
 MODEL = os.getenv("MODEL", "claude-opus-4-6").strip()
+
+# ---- Provider cadangan (OpenAI-compatible, mis. OpenRouter/Groq/OpenAI) ----
+# Dipakai otomatis kalau AgentRouter membalas 'content-blocked'.
+# Set PROVIDER=openai untuk menjadikannya provider UTAMA.
+PROVIDER = os.getenv("PROVIDER", "agentrouter").strip().lower()
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1").strip()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "").strip()
 
 # ---- Perilaku AI ----
 SYSTEM_PROMPT = os.getenv(
@@ -62,8 +70,12 @@ def validate():
     missing = []
     if not TELEGRAM_BOT_TOKEN:
         missing.append("TELEGRAM_BOT_TOKEN")
-    if not AGENTROUTER_API_KEY:
-        missing.append("AGENTROUTER_API_KEY")
+    if PROVIDER == "openai":
+        if not OPENAI_API_KEY:
+            missing.append("OPENAI_API_KEY (karena PROVIDER=openai)")
+    else:
+        if not AGENTROUTER_API_KEY:
+            missing.append("AGENTROUTER_API_KEY")
     if missing:
         raise SystemExit(
             "❌ Konfigurasi belum lengkap. Variabel berikut kosong: "

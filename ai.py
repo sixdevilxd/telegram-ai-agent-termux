@@ -1,6 +1,15 @@
 """
-ai.py — Otak agent: memanggil AgentRouter (Claude) dengan loop tool-use
-ala Claude Code, plus dukungan analisa gambar (vision).
+ai.py — Otak agent dengan DUA backend + auto-fallback:
+
+  • AgentRouter (route Anthropic /messages, wire image Claude Code)
+  • OpenAI-compatible (mis. OpenRouter/Groq/OpenAI) lewat /chat/completions
+
+Strategi:
+  - PROVIDER=agentrouter (default): pakai AgentRouter. Kalau kena 'content-blocked'
+    dan provider OpenAI dikonfigurasi, OTOMATIS pindah ke OpenAI-compatible.
+  - PROVIDER=openai: langsung pakai OpenAI-compatible.
+
+Keduanya mendukung tool-use + analisa gambar (vision).
 """
 import json
 import time
@@ -9,10 +18,11 @@ import requests
 import config
 import tools
 
-AR_URL = f"{config.AGENTROUTER_BASE_URL.rstrip('/')}/messages"
+MAX_TOOL_LOOPS = 6
 
-# Wire image Claude Code -> wajib agar lolos WAF/whitelist AgentRouter.
-HEADERS = {
+# ---- AgentRouter (Anthropic) ----
+AR_URL = f"{config.AGENTROUTER_BASE_URL.rstrip('/')}/messages"
+AR_HEADERS = {
     "Authorization": f"Bearer {config.AGENTROUTER_API_KEY}",
     "Content-Type": "application/json",
     "User-Agent": "claude-cli/2.1.158 (external, sdk-cli)",
@@ -28,59 +38,58 @@ HEADERS = {
     "X-Stainless-Runtime-Version": "v20.0.0",
 }
 
-MAX_TOOL_LOOPS = 6
+# ---- OpenAI-compatible ----
+OAI_URL = f"{config.OPENAI_BASE_URL.rstrip('/')}/chat/completions"
+OAI_HEADERS = {
+    "Authorization": f"Bearer {config.OPENAI_API_KEY}",
+    "Content-Type": "application/json",
+    "HTTP-Referer": "https://github.com/sixdevilxd/telegram-ai-agent-termux",
+    "X-Title": "CIPHER Telegram Agent",
+}
+OAI_TOOLS = [
+    {"type": "function", "function": {"name": t["name"], "description": t["description"],
+                                      "parameters": t["input_schema"]}}
+    for t in tools.TOOLS
+]
+OAI_DEFAULT_MODEL = config.OPENAI_MODEL or "openai/gpt-4o-mini"
 
 
 class ContentBlocked(RuntimeError):
     """AgentRouter menolak konten (moderasi/plan)."""
 
 
-def _call_api(model, messages, use_tools=True):
-    body = {
-        "model": model,
-        "max_tokens": config.MAX_TOKENS,
-        "system": config.SYSTEM_PROMPT,
-        "messages": messages,
-        "temperature": config.TEMPERATURE,
-    }
+def _text_anthropic(blocks):
+    return "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+
+
+# ===========================================================================
+# Backend 1: AgentRouter (Anthropic Messages)
+# ===========================================================================
+def _ar_call(model, messages, use_tools=True):
+    body = {"model": model, "max_tokens": config.MAX_TOKENS,
+            "system": config.SYSTEM_PROMPT, "messages": messages,
+            "temperature": config.TEMPERATURE}
     if use_tools:
         body["tools"] = tools.TOOLS
-
-    last_err = None
+    last = None
     for attempt in range(3):
-        r = requests.post(AR_URL, headers=HEADERS, json=body, timeout=180)
-        # AgentRouter kadang membalas JSON valid dengan content-type 'text/plain',
-        # atau halaman HTML dari WAF. Jadi: coba parse JSON apa adanya.
+        r = requests.post(AR_URL, headers=AR_HEADERS, json=body, timeout=180)
         try:
             data = r.json()
         except ValueError:
-            raise RuntimeError(f"AgentRouter balas non-JSON (HTTP {r.status_code}, kemungkinan WAF): {r.text[:200].strip()}")
-
+            raise RuntimeError(f"AgentRouter non-JSON (HTTP {r.status_code}, WAF?): {r.text[:200].strip()}")
         err = data.get("error") if isinstance(data, dict) else None
-        if err and (err.get("code") == "content-blocked" or "content-blocked" in str(err)):
-            # Sering intermiten -> coba lagi beberapa kali dengan jeda.
-            last_err = err
+        if err and ("content-blocked" in str(err)):
+            last = err
             time.sleep(1.5 * (attempt + 1))
             continue
         if r.status_code != 200 or err:
             raise RuntimeError(f"AgentRouter HTTP {r.status_code}: {err or r.text[:200]}")
         return data
-
-    raise ContentBlocked(str(last_err))
-
-
-def _text_of(content_blocks):
-    return "".join(b.get("text", "") for b in content_blocks if b.get("type") == "text").strip()
+    raise ContentBlocked(str(last))
 
 
-def run_agent(model, history, user_text, image_b64=None, media_type=None):
-    """
-    Jalankan satu giliran agent.
-    - history: list pesan sebelumnya (role/content) — akan diperbarui di pemanggil.
-    - image_b64/media_type: jika ada gambar (analisa chart).
-    Mengembalikan (jawaban_teks, daftar_tool_yang_dipakai).
-    """
-    # Susun konten pesan user (teks + opsional gambar)
+def _run_agentrouter(model, history, user_text, image_b64, media_type):
     if image_b64:
         user_content = [
             {"type": "image", "source": {"type": "base64", "media_type": media_type or "image/jpeg", "data": image_b64}},
@@ -88,49 +97,99 @@ def run_agent(model, history, user_text, image_b64=None, media_type=None):
         ]
     else:
         user_content = user_text
-
     messages = list(history) + [{"role": "user", "content": user_content}]
-    tools_used = []
-
+    used = []
     for _ in range(MAX_TOOL_LOOPS):
         try:
-            data = _call_api(model, messages, use_tools=True)
+            data = _ar_call(model, messages, use_tools=True)
         except ContentBlocked:
-            # Coba sekali lagi tanpa tools (kadang tools/hasil tool yang ketrigger moderasi).
-            try:
-                data = _call_api(model, messages, use_tools=False)
-            except ContentBlocked:
-                return (
-                    "🚫 *Request diblokir AgentRouter* (moderasi/plan).\n"
-                    "Ini dari sisi AgentRouter, bukan bot. Coba:\n"
-                    "• ubah/parafrase pertanyaannya\n"
-                    "• kurangi kata sensitif\n"
-                    "• atau ganti model: `/model claude-opus-4-6`\n"
-                    "• cek kuota/plan di dashboard AgentRouter"
-                ), tools_used
-        except RuntimeError as e:
-            if "tools" in str(e).lower() or "400" in str(e):
-                data = _call_api(model, messages, use_tools=False)
-            else:
-                raise
-
+            data = _ar_call(model, messages, use_tools=False)  # bisa ContentBlocked lagi -> bubble up
         blocks = data.get("content", [])
-        stop = data.get("stop_reason")
-
-        if stop == "tool_use":
-            # Simpan langkah asisten (berisi tool_use), lalu jalankan tool.
+        if data.get("stop_reason") == "tool_use":
             messages.append({"role": "assistant", "content": blocks})
             results = []
             for b in blocks:
                 if b.get("type") == "tool_use":
-                    name, args, tid = b.get("name"), b.get("input", {}), b.get("id")
-                    tools_used.append(name)
-                    output = tools.execute_tool(name, args)
-                    results.append({"type": "tool_result", "tool_use_id": tid, "content": output})
+                    used.append(b.get("name"))
+                    out = tools.execute_tool(b.get("name"), b.get("input", {}))
+                    results.append({"type": "tool_result", "tool_use_id": b.get("id"), "content": out})
             messages.append({"role": "user", "content": results})
             continue
+        return _text_anthropic(blocks) or "_(model tidak mengembalikan teks)_", used
+    return "⚠️ Terlalu banyak langkah tool. Coba lebih spesifik.", used
 
-        # Selesai — kembalikan teks final.
-        return _text_of(blocks) or "_(model tidak mengembalikan teks)_", tools_used
 
-    return "⚠️ Terlalu banyak langkah tool, dihentikan. Coba pertanyaan lebih spesifik.", tools_used
+# ===========================================================================
+# Backend 2: OpenAI-compatible (chat/completions)
+# ===========================================================================
+def _oai_call(model, messages, use_tools=True):
+    body = {"model": model, "max_tokens": config.MAX_TOKENS,
+            "messages": messages, "temperature": config.TEMPERATURE}
+    if use_tools:
+        body["tools"] = OAI_TOOLS
+        body["tool_choice"] = "auto"
+    r = requests.post(OAI_URL, headers=OAI_HEADERS, json=body, timeout=180)
+    try:
+        data = r.json()
+    except ValueError:
+        raise RuntimeError(f"Provider OpenAI non-JSON (HTTP {r.status_code}): {r.text[:200].strip()}")
+    if r.status_code != 200 or (isinstance(data, dict) and data.get("error")):
+        raise RuntimeError(f"Provider OpenAI HTTP {r.status_code}: {data.get('error') if isinstance(data, dict) else r.text[:200]}")
+    return data
+
+
+def _run_openai(model, history, user_text, image_b64, media_type):
+    if image_b64:
+        user_content = [
+            {"type": "text", "text": user_text or "Analisa chart pada gambar ini secara teknikal."},
+            {"type": "image_url", "image_url": {"url": f"data:{media_type or 'image/jpeg'};base64,{image_b64}"}},
+        ]
+    else:
+        user_content = user_text
+    messages = [{"role": "system", "content": config.SYSTEM_PROMPT}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": user_content})
+    used = []
+    for _ in range(MAX_TOOL_LOOPS):
+        data = _oai_call(model, messages, use_tools=True)
+        msg = data["choices"][0]["message"]
+        if msg.get("tool_calls"):
+            messages.append(msg)
+            for tc in msg["tool_calls"]:
+                name = tc["function"]["name"]
+                try:
+                    args = json.loads(tc["function"].get("arguments") or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+                used.append(name)
+                out = tools.execute_tool(name, args)
+                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": out})
+            continue
+        return (msg.get("content") or "_(model tidak mengembalikan teks)_"), used
+    return "⚠️ Terlalu banyak langkah tool. Coba lebih spesifik.", used
+
+
+# ===========================================================================
+# Entry point terpadu + auto-fallback
+# ===========================================================================
+def run_agent(model, history, user_text, image_b64=None, media_type=None):
+    """Mengembalikan (jawaban, daftar_tool). Auto-fallback AgentRouter -> OpenAI."""
+    has_fallback = bool(config.OPENAI_API_KEY)
+
+    if config.PROVIDER == "openai":
+        return _run_openai(config.OPENAI_MODEL or OAI_DEFAULT_MODEL, history, user_text, image_b64, media_type)
+
+    # Default: AgentRouter dulu
+    try:
+        return _run_agentrouter(model, history, user_text, image_b64, media_type)
+    except ContentBlocked:
+        if has_fallback:
+            ans, used = _run_openai(config.OPENAI_MODEL or OAI_DEFAULT_MODEL, history, user_text, image_b64, media_type)
+            return ans + f"\n\n`⚡ AgentRouter memblokir -> dialihkan ke {config.OPENAI_MODEL or OAI_DEFAULT_MODEL}`", used
+        return (
+            "🚫 *Request diblokir AgentRouter* (moderasi/plan) — dan provider cadangan belum diatur.\n"
+            "Solusi:\n"
+            "• parafrase pertanyaannya, atau\n"
+            "• aktifkan fallback: isi `OPENAI_API_KEY` (mis. dari openrouter.ai) di `.env`.\n"
+            "  Lihat README bagian *Provider cadangan*."
+        ), []

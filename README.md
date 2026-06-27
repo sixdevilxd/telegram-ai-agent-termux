@@ -75,6 +75,25 @@ python bot.py
 
 ---
 
+## 🔄 Provider cadangan (atasi "content-blocked")
+AgentRouter punya **moderasi server** yang kadang menolak request crypto dengan error
+`content-blocked` — ini dari sisi mereka, tidak bisa dimatikan dari kode. Solusinya:
+pasang **provider cadangan** OpenAI-compatible; kalau AgentRouter memblokir, bot
+**otomatis pindah**.
+
+Cara (pakai OpenRouter sebagai contoh):
+1. Daftar & buat API key di https://openrouter.ai/keys (ada model murah/gratis).
+2. Di `.env`, isi:
+   ```bash
+   OPENAI_BASE_URL=https://openrouter.ai/api/v1
+   OPENAI_API_KEY=sk-or-...
+   OPENAI_MODEL=openai/gpt-4o-mini      # atau model lain, mis. anthropic/claude-3.5-sonnet
+   ```
+3. Restart bot. Selesai — fallback aktif otomatis.
+
+> Mau langsung pakai provider cadangan sebagai UTAMA (tanpa AgentRouter)? Set `PROVIDER=openai`.
+> Bekerja dengan layanan OpenAI-compatible mana pun (Groq, OpenAI, Together, dll) — cukup ganti `OPENAI_BASE_URL`/`OPENAI_MODEL`.
+
 ## ⚙️ Konfigurasi (file `.env`)
 
 | Variabel              | Wajib | Keterangan |
