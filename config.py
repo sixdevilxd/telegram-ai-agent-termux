@@ -20,14 +20,20 @@ MODEL = os.getenv("MODEL", "claude-opus-4-6").strip()
 # ---- Provider (OpenAI-compatible, mis. NVIDIA NIM, OpenRouter, dll) ----
 # Diubah default-nya ke NVIDIA NIM (DeepSeek V4 Pro) via mode 'openai'
 PROVIDER = os.getenv("PROVIDER", "openai").strip().lower()
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://integrate.api.nvidia.com/v1").strip()
+# Endpoint juga bisa ditumpuk (pisah koma) untuk failover multi-provider.
+OPENAI_BASE_URLS = [u.strip() for u in os.getenv("OPENAI_BASE_URL", "https://integrate.api.nvidia.com/v1").split(",") if u.strip()]
+OPENAI_BASE_URL = OPENAI_BASE_URLS[0] if OPENAI_BASE_URLS else "https://integrate.api.nvidia.com/v1"
 # Bisa diisi BANYAK key dipisah koma untuk rotasi (key pooling) -> limit berlipat.
 # Contoh: OPENAI_API_KEY=nvapi-aaa,nvapi-bbb,nvapi-ccc
 OPENAI_API_KEYS = [k.strip() for k in os.getenv("OPENAI_API_KEY", "").split(",") if k.strip()]
 OPENAI_API_KEY = OPENAI_API_KEYS[0] if OPENAI_API_KEYS else ""
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "deepseek-ai/deepseek-v4-pro").strip()
+# Model teks juga bisa ditumpuk (pisah koma); posisi ke-i berpasangan dgn URL & key ke-i.
+OPENAI_MODELS = [m.strip() for m in os.getenv("OPENAI_MODEL", "deepseek-ai/deepseek-v4-pro").split(",") if m.strip()]
+OPENAI_MODEL = OPENAI_MODELS[0] if OPENAI_MODELS else "deepseek-ai/deepseek-v4-pro"
 # Model khusus analisa GAMBAR (vision). DeepSeek V4 = teks-saja, jadi pakai VLM NVIDIA.
-VISION_MODEL = os.getenv("VISION_MODEL", "meta/llama-3.2-90b-vision-instruct").strip()
+# Model vision juga bisa ditumpuk (pisah koma), berpasangan dgn URL & key ke-i.
+VISION_MODELS = [m.strip() for m in os.getenv("VISION_MODEL", "meta/llama-3.2-90b-vision-instruct").split(",") if m.strip()]
+VISION_MODEL = VISION_MODELS[0] if VISION_MODELS else "meta/llama-3.2-90b-vision-instruct"
 
 # ---- Perilaku AI ----
 SYSTEM_PROMPT = os.getenv(

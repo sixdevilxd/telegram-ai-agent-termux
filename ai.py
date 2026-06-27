@@ -39,17 +39,28 @@ AR_HEADERS = {
 }
 
 # ---- OpenAI-compatible ----
-OAI_URL = f"{config.OPENAI_BASE_URL.rstrip('/')}/chat/completions"
 OAI_HEADERS = {
     "Content-Type": "application/json",
     "HTTP-Referer": "https://github.com/sixdevilxd/telegram-ai-agent-termux",
     "X-Title": "CIPHER Telegram Agent",
 }
-# Kumpulan API key untuk rotasi (key pooling): kena 429 -> pindah key berikutnya.
-_OAI_KEYS = config.OPENAI_API_KEYS or ([config.OPENAI_API_KEY] if config.OPENAI_API_KEY else [])
 
 def _oai_headers(key):
     return {**OAI_HEADERS, "Authorization": f"Bearer {key}"}
+
+# Multi-backend: endpoint + key + model semuanya bisa ditumpuk (pisah koma di .env).
+# Posisi ke-i saling berpasangan; list lebih pendek diputar (cycle).
+_URLS = config.OPENAI_BASE_URLS or [config.OPENAI_BASE_URL]
+_KEYS = config.OPENAI_API_KEYS or ([config.OPENAI_API_KEY] if config.OPENAI_API_KEY else [""])
+_MODELS = config.OPENAI_MODELS or [config.OPENAI_MODEL]
+_VMODELS = config.VISION_MODELS or [config.VISION_MODEL]
+_N_BACKENDS = max(len(_URLS), len(_KEYS), len(_MODELS))
+BACKENDS = [{
+    "url": _URLS[i % len(_URLS)].rstrip("/") + "/chat/completions",
+    "key": _KEYS[i % len(_KEYS)],
+    "model": _MODELS[i % len(_MODELS)],
+    "vmodel": _VMODELS[i % len(_VMODELS)],
+} for i in range(_N_BACKENDS)]
 OAI_TOOLS = [
     {"type": "function", "function": {"name": t["name"], "description": t["description"],
                                       "parameters": t["input_schema"]}}
@@ -132,42 +143,54 @@ def _run_agentrouter(model, history, user_text, image_b64, media_type):
 # ===========================================================================
 # Backend 2: OpenAI-compatible (chat/completions)
 # ===========================================================================
-def _oai_call(model, messages, use_tools=True, max_tokens=None):
-    body = {"model": model, "max_tokens": max_tokens or config.MAX_TOKENS,
+def _oai_call(messages, use_tools=True, max_tokens=None, vision=False):
+    body = {"max_tokens": max_tokens or config.MAX_TOKENS,
             "messages": messages, "temperature": config.TEMPERATURE}
-    if config.REASONING:
+    if config.REASONING and not vision:
         # OpenRouter/o-series: aktifkan reasoning. Provider yang tak mendukung akan mengabaikan.
         body["reasoning"] = {"effort": "high"}
     if use_tools:
         body["tools"] = OAI_TOOLS
         body["tool_choice"] = "auto"
-    # Retry + ROTASI KEY: kena 429/5xx -> pindah ke key berikutnya, baru backoff.
-    keys = _OAI_KEYS or [""]
-    n = len(keys)
-    rounds = 3  # berapa kali memutar seluruh key
+    # Retry + ROTASI BACKEND: gagal/limit -> pindah endpoint/model/key berikutnya, lalu backoff.
+    backends = BACKENDS or [{
+        "url": config.OPENAI_BASE_URL.rstrip("/") + "/chat/completions",
+        "key": config.OPENAI_API_KEY, "model": config.OPENAI_MODEL, "vmodel": config.VISION_MODEL,
+    }]
+    n = len(backends)
+    rounds = 3
     last = None
     for attempt in range(n * rounds):
-        key = keys[attempt % n]
-        r = requests.post(OAI_URL, headers=_oai_headers(key), json=body, timeout=180)
-        if r.status_code == 429 or r.status_code >= 500:
-            last = f"HTTP {r.status_code}"
-            # backoff hanya setelah semua key dicoba di ronde ini
-            if (attempt % n) == n - 1:
-                ra = r.headers.get("Retry-After")
-                rnd = attempt // n
-                wait = float(ra) if (ra and ra.replace('.', '', 1).isdigit()) else (2 ** rnd) * 2
-                time.sleep(min(wait, 30))
-            continue
+        be = backends[attempt % n]
+        body["model"] = be["vmodel"] if vision else be["model"]
+        last_round = (attempt % n) == n - 1
         try:
-            data = r.json()
-        except ValueError:
-            raise RuntimeError(f"Provider OpenAI non-JSON (HTTP {r.status_code}): {r.text[:200].strip()}")
-        if r.status_code != 200 or (isinstance(data, dict) and data.get("error")):
-            raise RuntimeError(f"Provider OpenAI HTTP {r.status_code}: {data.get('error') if isinstance(data, dict) else r.text[:200]}")
-        return data
+            r = requests.post(be["url"], headers=_oai_headers(be["key"]), json=body, timeout=180)
+        except requests.RequestException as e:
+            last = f"{type(e).__name__} @ {be['url']}"
+            if last_round:
+                time.sleep(min((2 ** (attempt // n)) * 2, 30))
+            continue
+        if r.status_code == 200:
+            try:
+                data = r.json()
+            except ValueError:
+                last = f"non-JSON @ {body['model']}"
+                continue
+            if isinstance(data, dict) and data.get("error"):
+                last = f"{data.get('error')} @ {body['model']}"
+                continue
+            return data
+        # gagal -> catat lalu rotasi ke backend berikutnya
+        last = f"HTTP {r.status_code} @ {body['model']}: {r.text[:120].strip()}"
+        if (r.status_code == 429 or r.status_code >= 500) and last_round:
+            ra = r.headers.get("Retry-After")
+            wait = float(ra) if (ra and ra.replace('.', '', 1).isdigit()) else (2 ** (attempt // n)) * 2
+            time.sleep(min(wait, 30))
+        continue
     raise RuntimeError(
-        f"Semua {n} key kena rate limit ({last}). Tunggu sebentar, atau tambah key NVIDIA lagi "
-        "(pisahkan dengan koma di OPENAI_API_KEY)."
+        f"Semua {n} backend (endpoint/model/key) gagal atau kena limit. Error terakhir: {last}. "
+        "Tunggu sebentar, atau tambah endpoint/key/model lagi (pisah koma di .env)."
     )
 
 
@@ -175,14 +198,13 @@ def _run_openai(model, history, user_text, image_b64, media_type):
     # Gambar: model teks-saja (mis. DeepSeek V4) tidak bisa "melihat".
     # Routing ke model VISION NVIDIA, tanpa tool (VLM NIM tak mendukung function-calling).
     if image_b64:
-        vmodel = config.VISION_MODEL or model
         vcontent = [
             {"type": "text", "text": user_text or "Analisa chart pada gambar ini secara teknikal."},
             {"type": "image_url", "image_url": {"url": f"data:{media_type or 'image/jpeg'};base64,{image_b64}"}},
         ]
         vmsgs = [{"role": "system", "content": config.SYSTEM_PROMPT}, *history,
                  {"role": "user", "content": vcontent}]
-        data = _oai_call(vmodel, vmsgs, use_tools=False, max_tokens=min(config.MAX_TOKENS, 4096))
+        data = _oai_call(vmsgs, use_tools=False, max_tokens=min(config.MAX_TOKENS, 4096), vision=True)
         msg = data["choices"][0]["message"]
         return (msg.get("content") or "_(model tidak mengembalikan teks)_"), []
     user_content = user_text
@@ -191,7 +213,7 @@ def _run_openai(model, history, user_text, image_b64, media_type):
     messages.append({"role": "user", "content": user_content})
     used = []
     for _ in range(MAX_TOOL_LOOPS):
-        data = _oai_call(model, messages, use_tools=True)
+        data = _oai_call(messages, use_tools=True)
         msg = data["choices"][0]["message"]
         if msg.get("tool_calls"):
             messages.append(msg)
