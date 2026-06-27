@@ -137,14 +137,27 @@ def _oai_call(model, messages, use_tools=True, max_tokens=None):
     if use_tools:
         body["tools"] = OAI_TOOLS
         body["tool_choice"] = "auto"
-    r = requests.post(OAI_URL, headers=OAI_HEADERS, json=body, timeout=180)
-    try:
-        data = r.json()
-    except ValueError:
-        raise RuntimeError(f"Provider OpenAI non-JSON (HTTP {r.status_code}): {r.text[:200].strip()}")
-    if r.status_code != 200 or (isinstance(data, dict) and data.get("error")):
-        raise RuntimeError(f"Provider OpenAI HTTP {r.status_code}: {data.get('error') if isinstance(data, dict) else r.text[:200]}")
-    return data
+    # Retry dengan backoff untuk 429 (rate limit) & 5xx (server sibuk).
+    last = None
+    for attempt in range(4):
+        r = requests.post(OAI_URL, headers=OAI_HEADERS, json=body, timeout=180)
+        if r.status_code == 429 or r.status_code >= 500:
+            last = f"HTTP {r.status_code}"
+            ra = r.headers.get("Retry-After")
+            wait = float(ra) if (ra and ra.replace('.', '', 1).isdigit()) else (2 ** attempt) * 2
+            time.sleep(min(wait, 30))
+            continue
+        try:
+            data = r.json()
+        except ValueError:
+            raise RuntimeError(f"Provider OpenAI non-JSON (HTTP {r.status_code}): {r.text[:200].strip()}")
+        if r.status_code != 200 or (isinstance(data, dict) and data.get("error")):
+            raise RuntimeError(f"Provider OpenAI HTTP {r.status_code}: {data.get('error') if isinstance(data, dict) else r.text[:200]}")
+        return data
+    raise RuntimeError(
+        f"Provider sibuk / kena rate limit ({last}). NVIDIA NIM free tier punya batas "
+        "request per menit & kuota. Tunggu sebentar lalu coba lagi."
+    )
 
 
 def _run_openai(model, history, user_text, image_b64, media_type):
