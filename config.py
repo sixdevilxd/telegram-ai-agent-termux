@@ -17,13 +17,12 @@ AGENTROUTER_BASE_URL = os.getenv("AGENTROUTER_BASE_URL", "https://agentrouter.or
 # Model default. AgentRouter umumnya hanya mengizinkan claude-opus-4-6 di sebagian plan.
 MODEL = os.getenv("MODEL", "claude-opus-4-6").strip()
 
-# ---- Provider cadangan (OpenAI-compatible, mis. OpenRouter/Groq/OpenAI) ----
-# Dipakai otomatis kalau AgentRouter membalas 'content-blocked'.
-# Set PROVIDER=openai untuk menjadikannya provider UTAMA.
-PROVIDER = os.getenv("PROVIDER", "agentrouter").strip().lower()
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1").strip()
+# ---- Provider (OpenAI-compatible, mis. NVIDIA NIM, OpenRouter, dll) ----
+# Diubah default-nya ke NVIDIA NIM (DeepSeek V4 Pro) via mode 'openai'
+PROVIDER = os.getenv("PROVIDER", "openai").strip().lower()
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://integrate.api.nvidia.com/v1").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "").strip()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "deepseek-ai/deepseek-v4-pro").strip()
 
 # ---- Perilaku AI ----
 SYSTEM_PROMPT = os.getenv(
@@ -62,12 +61,12 @@ TEMPERATURE = float(os.getenv("TEMPERATURE", "0.7"))
 # Maksimum pasang pesan (user+assistant) yang diingat per chat
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "12"))
 
-# Maksimum token jawaban (wajib untuk route Anthropic)
-MAX_TOKENS = int(os.getenv("MAX_TOKENS", "4096"))
+# Maksimum token jawaban
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", "16384"))
 
 # ---- Reasoning mendalam (extended thinking) ----
 # true = model "berpikir" dulu sebelum menjawab -> analisa jauh lebih kuat & teliti.
-REASONING = os.getenv("REASONING", "true").strip().lower() in ("1", "true", "yes", "on")
+REASONING = os.getenv("REASONING", "false").strip().lower() in ("1", "true", "yes", "on")
 # Jatah token untuk proses berpikir (min 1024). Makin besar = makin dalam, tapi lebih lambat.
 REASONING_BUDGET = int(os.getenv("REASONING_BUDGET", "8000"))
 
