@@ -4,11 +4,20 @@ Bot Telegram berbasis AI yang ditenagai oleh [AgentRouter](https://agentrouter.o
 Ringan, mudah, dan dirancang untuk berjalan di **Termux** (Android) maupun komputer biasa.
 
 ## ✨ Fitur
-- Ngobrol dengan AI langsung dari Telegram (mendukung gpt-5, Claude, DeepSeek, GLM, dll lewat AgentRouter).
-- Ingatan percakapan per-chat (otomatis dipangkas).
-- Ganti model langsung dari chat: `/model claude-sonnet-4-5-20250929`.
-- Pembatasan akses opsional (hanya user tertentu).
-- Tanpa framework berat & tanpa kompilasi — hanya `requests` + `python-dotenv` (100% pure-Python, mulus di Termux).
+**CIPHER** — AI research agent crypto bergaya *coding vibes*, dengan tool realtime otomatis:
+- 🔍 **Web research** (DuckDuckGo) + baca isi halaman
+- 💰 **Crypto research** — harga/market (CoinGecko), token & pair (DexScreener)
+- 🆕 **New pairs / sniper detection** (GeckoTerminal) — deteksi dini pool baru
+- 🔥 **Hype & narasi** — trending coins + Reddit + web
+- 🛡️ **Rugcheck** + 🐋 **anti-whale** (konsentrasi top holder) untuk token Solana
+- 📊 **Analisa teknikal** — RSI, MACD, EMA, Bollinger, support/resistance
+- 🖼️ **Analisa gambar chart** — kirim screenshot, dianalisa via vision
+- 💻 **Coding / debug / encode** + jawab apa pun dengan data realtime
+- 🧠 Semua via **tool-use agent** (Claude memilih tool yang tepat otomatis)
+
+> ⚠️ Ini **research tool**, bukan bot trading. "Sniper" & "anti-whale" = deteksi/analisa,
+> BUKAN auto-beli. Bot tidak menyentuh wallet/dana. X/Twitter & Facebook tidak diakses
+> langsung (API tertutup) — sentimennya via web search + Reddit. DYOR, bukan saran finansial.
 
 ## 📋 Yang Perlu Disiapkan
 1. **Token Bot Telegram** — buat lewat [@BotFather](https://t.me/BotFather): kirim `/newbot`, ikuti langkahnya, salin token-nya.
@@ -81,11 +90,22 @@ python bot.py
 ## 💬 Perintah di Telegram
 | Perintah  | Fungsi |
 |-----------|--------|
-| `/start`  | Mulai / sapaan |
+| `/start`  | Sapaan |
 | `/help`   | Bantuan |
+| `/trending` | Coin yang sedang trending |
+| `/new <network>` | Pair/pool baru (solana/eth/bsc/base) |
+| `/rug <address>` | Rugcheck token Solana + anti-whale |
 | `/reset`  | Hapus ingatan percakapan |
 | `/model`  | Lihat/ganti model |
 | `/whoami` | Tampilkan user id & chat id |
+
+Selebihnya cukup **chat biasa** atau **kirim screenshot chart** — CIPHER otomatis
+memakai web search, data DEX, rugcheck, analisa teknikal, Reddit, dll. Contoh:
+- `analisa $SOL secara teknikal`
+- `token apa yang lagi hype hari ini?`
+- `pair baru di solana, mana yang aman?`
+- `cek rugcheck <contract address>`
+- `tulis script python untuk ... ` / `perbaiki kode ini: ...`
 
 ---
 

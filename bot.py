@@ -1,252 +1,200 @@
 #!/usr/bin/env python3
 """
-Telegram AI Agent
------------------
-Bot Telegram yang ditenagai AgentRouter (https://agentrouter.org).
-Ringan, tanpa framework berat, cocok dijalankan di Termux.
+Telegram AI Agent — CIPHER
+Bot Telegram research-agent crypto (ditenagai AgentRouter/Claude) untuk Termux.
 
-Cara kerja:
-- Mengambil pesan baru dari Telegram via long-polling (getUpdates).
-- Mengirim percakapan ke AgentRouter (OpenAI-compatible) lalu membalas.
-- Menyimpan riwayat percakapan per-chat di memori (otomatis dipangkas).
+Kemampuan: web research, crypto & token research (DexScreener/CoinGecko/
+GeckoTerminal), new pairs / "sniper" detection, rugcheck + anti-whale,
+analisa teknikal, analisa GAMBAR chart (vision), coding/encode, riset sosmed
+(Reddit + web), analisa narasi/hype — semua via tool-use otomatis.
 
 Perintah:
-  /start  - mulai / sapaan
-  /help   - bantuan
-  /reset  - hapus ingatan percakapan di chat ini
-  /model  - lihat atau ganti model, contoh: /model claude-sonnet-4-5-20250929
-  /whoami - tampilkan user id & chat id kamu
+  /start /help /reset /model /whoami
+  /trending           - coin trending
+  /new <network>      - pair/pool baru (solana/eth/bsc/base)
+  /rug <address>      - rugcheck token Solana
+Selain itu cukup chat biasa atau kirim screenshot chart.
 """
 import sys
 import time
+import base64
 import logging
 from collections import defaultdict, deque
 
 import requests
 
 import config
+import ai
 
-# ----------------------------------------------------------------------------
-# Logging
-# ----------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger("tg-ai-agent")
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s | %(levelname)s | %(message)s",
+                    datefmt="%H:%M:%S")
+log = logging.getLogger("cipher")
 
-# ----------------------------------------------------------------------------
-# Klien
-# ----------------------------------------------------------------------------
 config.validate()
-
 TG_API = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}"
+TG_FILE = f"https://api.telegram.org/file/bot{config.TELEGRAM_BOT_TOKEN}"
 
-# AgentRouter = relay Anthropic-compatible. Pakai route Messages.
-AR_URL = f"{config.AGENTROUTER_BASE_URL.rstrip('/')}/messages"
-
-# Header WAJIB menyerupai "wire image" Claude Code, kalau tidak request
-# akan ditolak WAF/whitelist AgentRouter ("unauthorized client" / "content-blocked").
-AR_HEADERS = {
-    "Authorization": f"Bearer {config.AGENTROUTER_API_KEY}",
-    "Content-Type": "application/json",
-    "User-Agent": "claude-cli/2.1.158 (external, sdk-cli)",
-    "anthropic-version": "2023-06-01",
-    "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12",
-    "anthropic-dangerous-direct-browser-access": "true",
-    "x-app": "cli",
-    "X-Stainless-Lang": "js",
-    "X-Stainless-Package-Version": "0.60.0",
-    "X-Stainless-OS": "Linux",
-    "X-Stainless-Arch": "arm64",
-    "X-Stainless-Runtime": "node",
-    "X-Stainless-Runtime-Version": "v20.0.0",
-}
-
-# Riwayat percakapan per chat_id (deque berisi {"role","content"})
 history = defaultdict(lambda: deque(maxlen=config.MAX_HISTORY * 2))
-# Model aktif per chat (default = config.MODEL)
 chat_model = {}
 
 
-# ----------------------------------------------------------------------------
-# Helper Telegram
-# ----------------------------------------------------------------------------
-def tg(method: str, **params):
-    """Panggil Telegram Bot API."""
+# ---------------- Telegram helpers ----------------
+def tg(method, **params):
     try:
-        r = requests.post(f"{TG_API}/{method}", json=params, timeout=65)
-        return r.json()
+        return requests.post(f"{TG_API}/{method}", json=params, timeout=65).json()
     except requests.RequestException as e:
-        log.warning("Telegram request gagal (%s): %s", method, e)
+        log.warning("Telegram %s gagal: %s", method, e)
         return {"ok": False, "error": str(e)}
 
 
-def send_message(chat_id: int, text: str, reply_to: int | None = None):
-    """Kirim pesan. Pesan panjang dipecah otomatis (limit Telegram 4096)."""
-    for chunk in _split(text, 4000):
-        params = {
-            "chat_id": chat_id,
-            "text": chunk,
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": True,
-        }
+def _split(text, size=4000):
+    text = text or "(kosong)"
+    return [text[i:i + size] for i in range(0, len(text), size)]
+
+
+def send_message(chat_id, text, reply_to=None):
+    for chunk in _split(text):
+        p = {"chat_id": chat_id, "text": chunk, "parse_mode": "Markdown",
+             "disable_web_page_preview": True}
         if reply_to:
-            params["reply_to_message_id"] = reply_to
-            reply_to = None  # hanya reply pada chunk pertama
-        res = tg("sendMessage", **params)
-        # Jika Markdown gagal (format tidak valid), kirim ulang sebagai teks polos.
-        if not res.get("ok"):
-            params.pop("parse_mode", None)
-            tg("sendMessage", **params)
+            p["reply_to_message_id"] = reply_to
+            reply_to = None
+        if not tg("sendMessage", **p).get("ok"):
+            p.pop("parse_mode", None)
+            tg("sendMessage", **p)
 
 
-def send_typing(chat_id: int):
+def send_typing(chat_id):
     tg("sendChatAction", chat_id=chat_id, action="typing")
 
 
-def _split(text: str, size: int):
-    text = text or "(kosong)"
-    return [text[i : i + size] for i in range(0, len(text), size)]
+def download_photo(file_id):
+    """Unduh foto Telegram -> (base64, media_type)."""
+    info = tg("getFile", file_id=file_id)
+    if not info.get("ok"):
+        return None, None
+    path = info["result"]["file_path"]
+    r = requests.get(f"{TG_FILE}/{path}", timeout=60)
+    r.raise_for_status()
+    mt = "image/png" if path.lower().endswith(".png") else "image/jpeg"
+    return base64.b64encode(r.content).decode(), mt
 
 
-# ----------------------------------------------------------------------------
-# Inti AI
-# ----------------------------------------------------------------------------
-def ask_ai(chat_id: int, user_text: str) -> str:
-    """Kirim percakapan ke AgentRouter dan kembalikan jawaban."""
+# ---------------- Logika ----------------
+def is_allowed(uid):
+    return not config.ALLOWED_USERS or uid in config.ALLOWED_USERS
+
+
+def run_and_reply(chat_id, text, msg_id, image_b64=None, media_type=None):
+    send_typing(chat_id)
     model = chat_model.get(chat_id, config.MODEL)
-
-    # Format Anthropic Messages: system terpisah, messages user/assistant bergantian.
-    messages = list(history[chat_id])
-    messages.append({"role": "user", "content": user_text})
-
-    resp = requests.post(
-        AR_URL,
-        headers=AR_HEADERS,
-        json={
-            "model": model,
-            "max_tokens": config.MAX_TOKENS,
-            "system": config.SYSTEM_PROMPT,
-            "messages": messages,
-            "temperature": config.TEMPERATURE,
-        },
-        timeout=120,
-    )
-    ctype = resp.headers.get("content-type", "")
-    if resp.status_code != 200 or "application/json" not in ctype:
-        # WAF kadang membalas halaman HTML, bukan JSON.
-        snippet = resp.text[:200].replace("\n", " ")
-        raise RuntimeError(f"AgentRouter HTTP {resp.status_code} ({ctype}): {snippet}")
-
-    data = resp.json()
-    # Respon Anthropic: content = daftar blok; ambil semua blok teks.
-    answer = "".join(
-        b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"
-    ).strip()
-
-    # Simpan ke riwayat
-    history[chat_id].append({"role": "user", "content": user_text})
-    history[chat_id].append({"role": "assistant", "content": answer})
-    return answer or "_(model tidak mengembalikan teks)_"
+    try:
+        answer, used = ai.run_agent(model, history[chat_id], text,
+                                    image_b64=image_b64, media_type=media_type)
+        # Simpan ke memori (versi teks saja, gambar tidak disimpan)
+        history[chat_id].append({"role": "user", "content": text or "[gambar chart]"})
+        history[chat_id].append({"role": "assistant", "content": answer})
+        if used:
+            answer += f"\n\n`🔧 tools: {', '.join(dict.fromkeys(used))}`"
+        send_message(chat_id, answer, reply_to=msg_id)
+    except Exception as e:  # noqa: BLE001
+        log.exception("agent error")
+        send_message(chat_id, f"⚠️ Error saat memproses.\n`{type(e).__name__}: {e}`")
 
 
-# ----------------------------------------------------------------------------
-# Penanganan perintah & pesan
-# ----------------------------------------------------------------------------
-def is_allowed(user_id: int) -> bool:
-    return not config.ALLOWED_USERS or user_id in config.ALLOWED_USERS
-
-
-def handle_message(msg: dict):
+def handle_message(msg):
     chat_id = msg["chat"]["id"]
-    user = msg.get("from", {})
-    user_id = user.get("id")
-    text = (msg.get("text") or "").strip()
+    uid = msg.get("from", {}).get("id")
     msg_id = msg.get("message_id")
+    text = (msg.get("text") or msg.get("caption") or "").strip()
+
+    if not is_allowed(uid):
+        send_message(chat_id, "⛔ Kamu tidak diizinkan memakai bot ini.")
+        return
+
+    # ----- Gambar (analisa chart) -----
+    if msg.get("photo"):
+        send_typing(chat_id)
+        try:
+            file_id = msg["photo"][-1]["file_id"]  # resolusi tertinggi
+            b64, mt = download_photo(file_id)
+            if not b64:
+                send_message(chat_id, "⚠️ Gagal mengunduh gambar.")
+                return
+            run_and_reply(chat_id, text, msg_id, image_b64=b64, media_type=mt)
+        except Exception as e:  # noqa: BLE001
+            send_message(chat_id, f"⚠️ Gagal proses gambar: `{e}`")
+        return
 
     if not text:
-        send_message(chat_id, "Saat ini saya hanya bisa membaca pesan teks 🙂")
+        send_message(chat_id, "Kirim teks atau screenshot chart 🙂")
         return
 
-    if not is_allowed(user_id):
-        send_message(chat_id, "⛔ Maaf, kamu tidak diizinkan memakai bot ini.")
-        log.info("Tolak user tidak diizinkan: %s", user_id)
-        return
-
-    # --- Perintah ---
+    # ----- Perintah -----
     if text.startswith("/"):
         cmd, _, arg = text.partition(" ")
-        cmd = cmd.split("@")[0].lower()  # buang @namabot di grup
+        cmd = cmd.split("@")[0].lower()
         arg = arg.strip()
-
         if cmd == "/start":
-            send_message(
-                chat_id,
-                "👋 *Halo!* Saya asisten AI kamu (ditenagai AgentRouter).\n\n"
-                "Langsung kirim pertanyaan apa saja.\n\n"
-                "Perintah: /help",
-            )
+            send_message(chat_id,
+                "```\n  ____ ___ ____  _   _ _____ ____\n |  _ \\_ _|  _ \\| | | | ____|  _ \\\n | |_) | || |_) | |_| |  _| | |_) |\n |  __/| ||  __/|  _  | |___|  _ <\n |_|  |___|_|   |_| |_|_____|_| \\_\\\n```\n"
+                "*CIPHER* — AI research agent crypto 🧬\n\n"
+                "Tanya apa saja, contoh:\n"
+                "• `analisa $SOL secara teknikal`\n"
+                "• `cek rugcheck <contract address>`\n"
+                "• `token apa yang lagi hype hari ini?`\n"
+                "• `pair baru di solana`\n"
+                "• kirim *screenshot chart* untuk dianalisa\n\n"
+                "Ketik /help untuk daftar lengkap.")
         elif cmd == "/help":
-            send_message(
-                chat_id,
-                "*Bantuan*\n"
-                "• Kirim teks biasa untuk ngobrol dengan AI.\n"
-                "• /reset — hapus ingatan percakapan.\n"
-                "• /model — lihat/ganti model. Contoh:\n"
-                "  `/model claude-sonnet-4-5-20250929`\n"
-                "• /whoami — lihat user id & chat id kamu.",
-            )
+            send_message(chat_id,
+                "*Perintah:*\n"
+                "/trending — coin trending\n"
+                "/new `<network>` — pair baru (solana/eth/bsc/base)\n"
+                "/rug `<address>` — rugcheck token Solana\n"
+                "/model `<nama>` — ganti model\n"
+                "/reset — hapus memori\n"
+                "/whoami — id kamu\n\n"
+                "Selebihnya cukup *chat biasa* atau *kirim gambar chart*. "
+                "CIPHER otomatis memakai web search, data DEX, rugcheck, TA, Reddit, dll.\n\n"
+                "_DYOR — bukan saran finansial._")
         elif cmd == "/reset":
             history.pop(chat_id, None)
-            send_message(chat_id, "🧹 Ingatan percakapan di chat ini sudah dihapus.")
+            send_message(chat_id, "🧹 Memori dihapus.")
         elif cmd == "/model":
             if arg:
                 chat_model[chat_id] = arg
-                send_message(chat_id, f"✅ Model diganti ke: `{arg}`")
+                send_message(chat_id, f"✅ Model: `{arg}`")
             else:
-                cur = chat_model.get(chat_id, config.MODEL)
-                send_message(
-                    chat_id,
-                    f"Model aktif: `{cur}`\n"
-                    "Ganti dengan: `/model <nama-model>`\n"
-                    "Contoh model: `claude-opus-4-6`. (AgentRouter sering hanya mengizinkan model ini.)",
-                )
+                send_message(chat_id, f"Model aktif: `{chat_model.get(chat_id, config.MODEL)}`\n"
+                                      "Ganti: `/model claude-opus-4-6`")
         elif cmd == "/whoami":
-            send_message(chat_id, f"user_id: `{user_id}`\nchat_id: `{chat_id}`")
+            send_message(chat_id, f"user_id: `{uid}`\nchat_id: `{chat_id}`")
+        elif cmd == "/trending":
+            run_and_reply(chat_id, "Tampilkan coin yang sedang trending dan narasinya.", msg_id)
+        elif cmd == "/new":
+            net = arg or "solana"
+            run_and_reply(chat_id, f"Tampilkan pair/pool baru di {net} dan ingatkan untuk rugcheck.", msg_id)
+        elif cmd == "/rug":
+            if not arg:
+                send_message(chat_id, "Pakai: `/rug <contract_address>`")
+            else:
+                run_and_reply(chat_id, f"Rugcheck token ini dan analisa anti-whale: {arg}", msg_id)
         else:
-            send_message(chat_id, "Perintah tidak dikenal. Ketik /help.")
+            send_message(chat_id, "Perintah tidak dikenal. /help")
         return
 
-    # --- Pesan biasa -> AI ---
-    send_typing(chat_id)
-    try:
-        answer = ask_ai(chat_id, text)
-        send_message(chat_id, answer, reply_to=msg_id)
-    except Exception as e:  # noqa: BLE001
-        log.exception("Gagal memproses pesan")
-        send_message(
-            chat_id,
-            "⚠️ Maaf, terjadi kesalahan saat menghubungi AI.\n"
-            f"`{type(e).__name__}: {e}`",
-        )
+    # ----- Chat biasa -> agent -----
+    run_and_reply(chat_id, text, msg_id)
 
 
-# ----------------------------------------------------------------------------
-# Loop utama (long-polling)
-# ----------------------------------------------------------------------------
 def main():
     me = tg("getMe")
     if not me.get("ok"):
-        raise SystemExit(
-            "❌ Token Telegram tidak valid atau tidak ada koneksi internet.\n"
-            f"   Respon: {me}"
-        )
-    bot_name = me["result"].get("username")
-    log.info("Bot aktif sebagai @%s — menggunakan model '%s'", bot_name, config.MODEL)
-    log.info("Tekan Ctrl+C untuk berhenti.")
-
+        raise SystemExit(f"❌ Token Telegram tidak valid / tidak ada internet. {me}")
+    log.info("CIPHER aktif sebagai @%s | model '%s'", me["result"].get("username"), config.MODEL)
+    log.info("Ctrl+C untuk berhenti.")
     offset = None
     while True:
         try:
@@ -254,15 +202,15 @@ def main():
             if not res.get("ok"):
                 time.sleep(3)
                 continue
-            for update in res["result"]:
-                offset = update["update_id"] + 1
-                if "message" in update:
-                    handle_message(update["message"])
+            for u in res["result"]:
+                offset = u["update_id"] + 1
+                if "message" in u:
+                    handle_message(u["message"])
         except KeyboardInterrupt:
-            log.info("Dihentikan oleh pengguna. Sampai jumpa! 👋")
+            log.info("Berhenti. 👋")
             sys.exit(0)
         except Exception:  # noqa: BLE001
-            log.exception("Error di loop utama, lanjut dalam 3 detik...")
+            log.exception("loop error, lanjut 3 detik...")
             time.sleep(3)
 
 
