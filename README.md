@@ -24,10 +24,9 @@ Ringan, mudah, dan dirancang untuk berjalan di **Termux** (Android) maupun kompu
    ```bash
    pkg update -y && pkg upgrade -y
    pkg install -y python git
-   git clone https://github.com/USERNAME/telegram-ai-agent.git
+   git clone https://github.com/sixdevilxd/telegram-ai-agent-termux.git
    cd telegram-ai-agent
    ```
-   > Ganti `USERNAME` dengan akun GitHub tempat repo ini berada.
 
 3. **Isi kredensial:**
    ```bash
@@ -58,7 +57,7 @@ Ringan, mudah, dan dirancang untuk berjalan di **Termux** (Android) maupun kompu
 ## 💻 Cara Pakai di Komputer (Linux/Mac/Windows)
 
 ```bash
-git clone https://github.com/USERNAME/telegram-ai-agent.git
+git clone https://github.com/sixdevilxd/telegram-ai-agent-termux.git
 cd telegram-ai-agent
 pip install -r requirements.txt
 cp .env.example .env      # lalu isi token (Windows: copy .env.example .env)
