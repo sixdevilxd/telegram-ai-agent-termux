@@ -41,10 +41,16 @@ def _call_api(model, messages, use_tools=True):
     if use_tools:
         body["tools"] = tools.TOOLS
     r = requests.post(AR_URL, headers=HEADERS, json=body, timeout=180)
-    ctype = r.headers.get("content-type", "")
-    if r.status_code != 200 or "application/json" not in ctype:
-        raise RuntimeError(f"AgentRouter HTTP {r.status_code} ({ctype}): {r.text[:200].strip()}")
-    return r.json()
+    # AgentRouter kadang membalas JSON valid dengan content-type 'text/plain',
+    # atau halaman HTML dari WAF. Jadi: coba parse JSON apa adanya.
+    try:
+        data = r.json()
+    except ValueError:
+        raise RuntimeError(f"AgentRouter balas non-JSON (HTTP {r.status_code}, kemungkinan WAF): {r.text[:200].strip()}")
+    if r.status_code != 200 or "error" in data:
+        err = data.get("error") if isinstance(data, dict) else r.text[:200]
+        raise RuntimeError(f"AgentRouter HTTP {r.status_code}: {err}")
+    return data
 
 
 def _text_of(content_blocks):
