@@ -12,10 +12,10 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 AGENTROUTER_API_KEY = os.getenv("AGENTROUTER_API_KEY", "").strip()
 
-# ---- Pengaturan AgentRouter (OpenAI-compatible) ----
+# ---- Pengaturan AgentRouter (route Anthropic / Claude Code) ----
 AGENTROUTER_BASE_URL = os.getenv("AGENTROUTER_BASE_URL", "https://agentrouter.org/v1").strip()
-# Model default. Bisa diganti lewat .env atau perintah /model di chat.
-MODEL = os.getenv("MODEL", "gpt-5").strip()
+# Model default. AgentRouter umumnya hanya mengizinkan claude-opus-4-6 di sebagian plan.
+MODEL = os.getenv("MODEL", "claude-opus-4-6").strip()
 
 # ---- Perilaku AI ----
 SYSTEM_PROMPT = os.getenv(
@@ -30,6 +30,9 @@ TEMPERATURE = float(os.getenv("TEMPERATURE", "0.7"))
 
 # Maksimum pasang pesan (user+assistant) yang diingat per chat
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "12"))
+
+# Maksimum token jawaban (wajib untuk route Anthropic)
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", "4096"))
 
 # Daftar user ID Telegram yang diizinkan (kosong = semua orang boleh).
 # Contoh di .env: ALLOWED_USERS=12345678,98765432

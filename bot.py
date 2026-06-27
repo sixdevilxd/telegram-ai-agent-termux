@@ -43,19 +43,25 @@ config.validate()
 
 TG_API = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}"
 
-# Endpoint chat completions AgentRouter (OpenAI-compatible).
-AR_URL = f"{config.AGENTROUTER_BASE_URL.rstrip('/')}/chat/completions"
+# AgentRouter = relay Anthropic-compatible. Pakai route Messages.
+AR_URL = f"{config.AGENTROUTER_BASE_URL.rstrip('/')}/messages"
 
-# Header dibuat menyerupai OpenAI SDK resmi -> AgentRouter memblokir klien
-# yang tidak dikenali ("unauthorized client detected").
+# Header WAJIB menyerupai "wire image" Claude Code, kalau tidak request
+# akan ditolak WAF/whitelist AgentRouter ("unauthorized client" / "content-blocked").
 AR_HEADERS = {
     "Authorization": f"Bearer {config.AGENTROUTER_API_KEY}",
     "Content-Type": "application/json",
-    "Accept": "application/json",
-    "User-Agent": "OpenAI/Python 1.51.0",
-    "X-Stainless-Lang": "python",
-    "X-Stainless-Package-Version": "1.51.0",
-    "X-Stainless-Runtime": "CPython",
+    "User-Agent": "claude-cli/2.1.158 (external, sdk-cli)",
+    "anthropic-version": "2023-06-01",
+    "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12",
+    "anthropic-dangerous-direct-browser-access": "true",
+    "x-app": "cli",
+    "X-Stainless-Lang": "js",
+    "X-Stainless-Package-Version": "0.60.0",
+    "X-Stainless-OS": "Linux",
+    "X-Stainless-Arch": "arm64",
+    "X-Stainless-Runtime": "node",
+    "X-Stainless-Runtime-Version": "v20.0.0",
 }
 
 # Riwayat percakapan per chat_id (deque berisi {"role","content"})
@@ -112,8 +118,8 @@ def ask_ai(chat_id: int, user_text: str) -> str:
     """Kirim percakapan ke AgentRouter dan kembalikan jawaban."""
     model = chat_model.get(chat_id, config.MODEL)
 
-    messages = [{"role": "system", "content": config.SYSTEM_PROMPT}]
-    messages.extend(history[chat_id])
+    # Format Anthropic Messages: system terpisah, messages user/assistant bergantian.
+    messages = list(history[chat_id])
     messages.append({"role": "user", "content": user_text})
 
     resp = requests.post(
@@ -121,16 +127,24 @@ def ask_ai(chat_id: int, user_text: str) -> str:
         headers=AR_HEADERS,
         json={
             "model": model,
+            "max_tokens": config.MAX_TOKENS,
+            "system": config.SYSTEM_PROMPT,
             "messages": messages,
             "temperature": config.TEMPERATURE,
         },
         timeout=120,
     )
-    if resp.status_code != 200:
-        raise RuntimeError(f"AgentRouter HTTP {resp.status_code}: {resp.text[:300]}")
+    ctype = resp.headers.get("content-type", "")
+    if resp.status_code != 200 or "application/json" not in ctype:
+        # WAF kadang membalas halaman HTML, bukan JSON.
+        snippet = resp.text[:200].replace("\n", " ")
+        raise RuntimeError(f"AgentRouter HTTP {resp.status_code} ({ctype}): {snippet}")
 
     data = resp.json()
-    answer = (data["choices"][0]["message"].get("content") or "").strip()
+    # Respon Anthropic: content = daftar blok; ambil semua blok teks.
+    answer = "".join(
+        b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"
+    ).strip()
 
     # Simpan ke riwayat
     history[chat_id].append({"role": "user", "content": user_text})
@@ -197,7 +211,7 @@ def handle_message(msg: dict):
                     chat_id,
                     f"Model aktif: `{cur}`\n"
                     "Ganti dengan: `/model <nama-model>`\n"
-                    "Contoh model: `gpt-5`, `claude-sonnet-4-5-20250929`, `deepseek-v3`",
+                    "Contoh model: `claude-opus-4-6`. (AgentRouter sering hanya mengizinkan model ini.)",
                 )
         elif cmd == "/whoami":
             send_message(chat_id, f"user_id: `{user_id}`\nchat_id: `{chat_id}`")

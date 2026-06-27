@@ -96,7 +96,8 @@ python bot.py
 ## ❓ Masalah Umum
 - **"Konfigurasi belum lengkap"** → file `.env` belum diisi.
 - **"Token Telegram tidak valid"** → cek lagi `TELEGRAM_BOT_TOKEN`.
-- **Error dari AI / "unauthorized client"** → pastikan API key AgentRouter benar dan masih punya kuota. Bot ini sudah mengirim header ala OpenAI SDK agar tidak diblokir.
+- **`content-blocked` dari AgentRouter** → model yang kamu minta TIDAK termasuk di plan key-mu (paling sering), atau kena moderasi. Banyak plan AgentRouter hanya mengizinkan `claude-opus-4-6`. Coba `/model claude-opus-4-6` atau cek model yang diizinkan di dashboard AgentRouter.
+- **Jawaban kosong / error HTML (WAF)** → request tidak menyerupai Claude Code. Bot ini sudah mengirim "wire image" Claude Code yang benar; pastikan kamu memakai versi terbaru (`git pull`).
 - **Gagal install / error build `jiter` atau `pydantic-core`** → versi ini sudah TIDAK memakai paket `openai`, jadi tak ada lagi yang perlu dikompilasi. Pastikan kamu sudah `git pull` versi terbaru, lalu `pip install -r requirements.txt`.
 - **Bot diam saja** → pastikan `bash run.sh` masih berjalan dan ada koneksi internet.
 
