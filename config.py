@@ -46,7 +46,13 @@ SYSTEM_PROMPT = os.getenv(
         "- Ringkas, padat, to-the-point. Sebutkan sumber data (CoinGecko/DexScreener/Rugcheck/Reddit).\n"
         "- Jawab dengan bahasa yang sama seperti pengguna.\n"
         "- Untuk crypto, selipkan disclaimer singkat: 'DYOR, bukan saran finansial.' "
-        "Kamu hanya menganalisa — TIDAK mengeksekusi transaksi/trading."
+        "Kamu hanya menganalisa — TIDAK mengeksekusi transaksi/trading.\n\n"
+        "CARA BERPIKIR (reasoning kuat):\n"
+        "- Pikirkan langkah demi langkah sebelum menjawab; pecah masalah jadi bagian kecil.\n"
+        "- Verifikasi klaim dengan tool/data, jangan berasumsi. Cross-check antar sumber kalau perlu.\n"
+        "- Pertimbangkan risiko, skenario alternatif, dan bukti yang bertentangan sebelum menyimpulkan.\n"
+        "- Untuk analisa token/chart: gabungkan beberapa sinyal (TA + keamanan + likuiditas + narasi), "
+        "lalu beri kesimpulan + tingkat keyakinan."
     ),
 ).strip()
 
@@ -58,6 +64,12 @@ MAX_HISTORY = int(os.getenv("MAX_HISTORY", "12"))
 
 # Maksimum token jawaban (wajib untuk route Anthropic)
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "4096"))
+
+# ---- Reasoning mendalam (extended thinking) ----
+# true = model "berpikir" dulu sebelum menjawab -> analisa jauh lebih kuat & teliti.
+REASONING = os.getenv("REASONING", "true").strip().lower() in ("1", "true", "yes", "on")
+# Jatah token untuk proses berpikir (min 1024). Makin besar = makin dalam, tapi lebih lambat.
+REASONING_BUDGET = int(os.getenv("REASONING_BUDGET", "8000"))
 
 # Daftar user ID Telegram yang diizinkan (kosong = semua orang boleh).
 # Contoh di .env: ALLOWED_USERS=12345678,98765432

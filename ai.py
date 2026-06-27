@@ -67,8 +67,14 @@ def _text_anthropic(blocks):
 # ===========================================================================
 def _ar_call(model, messages, use_tools=True):
     body = {"model": model, "max_tokens": config.MAX_TOKENS,
-            "system": config.SYSTEM_PROMPT, "messages": messages,
-            "temperature": config.TEMPERATURE}
+            "system": config.SYSTEM_PROMPT, "messages": messages}
+    if config.REASONING:
+        # Extended thinking: model "berpikir" dulu. max_tokens harus > budget.
+        body["thinking"] = {"type": "enabled", "budget_tokens": config.REASONING_BUDGET}
+        body["max_tokens"] = config.REASONING_BUDGET + config.MAX_TOKENS
+        # Saat thinking aktif, temperature tidak boleh diset (harus default).
+    else:
+        body["temperature"] = config.TEMPERATURE
     if use_tools:
         body["tools"] = tools.TOOLS
     last = None
@@ -125,6 +131,9 @@ def _run_agentrouter(model, history, user_text, image_b64, media_type):
 def _oai_call(model, messages, use_tools=True):
     body = {"model": model, "max_tokens": config.MAX_TOKENS,
             "messages": messages, "temperature": config.TEMPERATURE}
+    if config.REASONING:
+        # OpenRouter/o-series: aktifkan reasoning. Provider yang tak mendukung akan mengabaikan.
+        body["reasoning"] = {"effort": "high"}
     if use_tools:
         body["tools"] = OAI_TOOLS
         body["tool_choice"] = "auto"

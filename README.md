@@ -13,6 +13,7 @@ Ringan, mudah, dan dirancang untuk berjalan di **Termux** (Android) maupun kompu
 - 📊 **Analisa teknikal** — RSI, MACD, EMA, Bollinger, support/resistance
 - 🖼️ **Analisa gambar chart** — kirim screenshot, dianalisa via vision
 - 💻 **Coding / debug / encode** + jawab apa pun dengan data realtime
+- 🧠 **Reasoning mendalam (extended thinking)** — model berpikir langkah demi langkah sebelum menjawab
 - 🧠 Semua via **tool-use agent** (Claude memilih tool yang tepat otomatis)
 
 > ⚠️ Ini **research tool**, bukan bot trading. "Sniper" & "anti-whale" = deteksi/analisa,
